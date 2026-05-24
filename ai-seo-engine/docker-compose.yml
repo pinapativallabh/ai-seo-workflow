@@ -1,0 +1,11 @@
+
+version: '3.8'
+services:
+  postgres:
+    image: postgres
+
+  n8n:
+    image: n8nio/n8n
+
+  ollama:
+    image: ollama/ollama
