@@ -1,0 +1,136 @@
+{
+  "name": "SEO_05_ARTICLE_ENGINE",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0],
+      "id": "trigger-node-05",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": { "__rl": true, "mode": "list", "value": "public" },
+        "table": { "__rl": true, "value": "articles", "mode": "list", "cachedResultName": "articles" },
+        "limit": 1,
+        "where": {
+          "values": [
+            { "column": "status", "value": "draft" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [200, 0],
+      "id": "pg-select-draft",
+      "name": "Fetch Draft Brief",
+      "credentials": { "postgres": { "id": "y61EplBvUOpfeqr8", "name": "Postgres account" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const article = $input.first().json;\nlet brief;\n\ntry {\n  brief = JSON.parse(article.content);\n} catch (e) {\n  throw new Error(`Malformed JSON in article ID: ${article.id}`);\n}\n\nif (!brief.h2_sections || !Array.isArray(brief.h2_sections)) {\n  throw new Error(`Invalid brief structure for article ID: ${article.id}`);\n}\n\nreturn brief.h2_sections.map(section => ({\n  json: {\n    article_id: article.id,\n    seo_title: brief.seo_title,\n    search_intent: brief.search_intent,\n    h2: section.heading,\n    subtopics: Array.isArray(section.subtopics) ? section.subtopics.join(', ') : section.subtopics\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 0],
+      "id": "code-validate-split",
+      "name": "Validate & Split H2s"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "prompt-assign",
+              "name": "prompt",
+              "value": "=You are an expert SEO content writer. Write a comprehensive section for the article titled \"{{ $json.seo_title }}\".\n\nSection Heading: {{ $json.h2 }}\nSubtopics to cover: {{ $json.subtopics }}\nSearch Intent: {{ $json.search_intent }}\n\nRequirements:\n- Output ONLY the body paragraphs for this section.\n- Do not include the H2 heading itself (it is handled systematically).\n- Format in clean HTML (<p>, <ul>, <li>, <strong>).\n- Do not include markdown blocks like ```html.\n- Be highly factual and detailed.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 0],
+      "id": "set-h2-prompt",
+      "name": "Build Section Prompt"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "[http://host.docker.internal:11434/api/generate](http://host.docker.internal:11434/api/generate)",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "model", "value": "qwen3:8b" },
+            { "name": "prompt", "value": "={{ $json.prompt }}" },
+            { "name": "stream", "value": "={{ false }}" }
+          ]
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxRetries": 3,
+          "retryWaitTime": 5000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [800, 0],
+      "id": "http-ollama-generate",
+      "name": "Generate Section (Qwen3)"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst article_id = items[0].json.article_id;\nconst seo_title = items[0].json.seo_title;\n\nlet finalContent = `<h1>${seo_title}</h1>\\n`;\n\nitems.forEach(item => {\n  const generatedText = item.json.response || '';\n  finalContent += `<h2>${item.json.h2}</h2>\\n${generatedText}\\n\\n`;\n});\n\nreturn [{\n  json: {\n    id: article_id,\n    content: finalContent,\n    status: 'generated'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 0],
+      "id": "code-assemble",
+      "name": "Assemble Full Article"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": { "__rl": true, "mode": "list", "value": "public" },
+        "table": { "__rl": true, "value": "articles", "mode": "list", "cachedResultName": "articles" },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $json.id }}",
+            "content": "={{ $json.content }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": ["id"],
+          "schema": [
+            { "id": "id", "type": "number", "required": true },
+            { "id": "content", "type": "string" },
+            { "id": "status", "type": "string" }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [1200, 0],
+      "id": "pg-update-article",
+      "name": "Store Final Article",
+      "credentials": { "postgres": { "id": "y61EplBvUOpfeqr8", "name": "Postgres account" } }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": { "main": [[{ "node": "Fetch Draft Brief", "type": "main", "index": 0 }]] },
+    "Fetch Draft Brief": { "main": [[{ "node": "Validate & Split H2s", "type": "main", "index": 0 }]] },
+    "Validate & Split H2s": { "main": [[{ "node": "Build Section Prompt", "type": "main", "index": 0 }]] },
+    "Build Section Prompt": { "main": [[{ "node": "Generate Section (Qwen3)", "type": "main", "index": 0 }]] },
+    "Generate Section (Qwen3)": { "main": [[{ "node": "Assemble Full Article", "type": "main", "index": 0 }]] },
+    "Assemble Full Article": { "main": [[{ "node": "Store Final Article", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}
